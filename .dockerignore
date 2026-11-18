@@ -1,0 +1,14 @@
+.git
+.github
+**/bin
+**/obj
+.packages/*.download
+.secrets
+.env
+.env.*
+tests
+test-results
+artifacts
+README.md
+docs
+.nuget/

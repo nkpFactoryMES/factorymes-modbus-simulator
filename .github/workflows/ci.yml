@@ -1,0 +1,73 @@
+name: Service CI
+on:
+  push:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Restore immutable platform packages
+        shell: pwsh
+        run: ./build/restore-packages.ps1
+      - name: Locked restore and build
+        shell: pwsh
+        run: |
+          dotnet restore simulators/modbus-simulator/FactoryMES.ModbusSimulator.csproj --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
+          dotnet build simulators/modbus-simulator/FactoryMES.ModbusSimulator.csproj -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Run owned contract checks
+        shell: pwsh
+        run: |
+          if (Test-Path tests) {
+            foreach ($project in Get-ChildItem tests -Filter '*.csproj' -Recurse) {
+              dotnet restore $project.FullName --locked-mode
+              if ($LASTEXITCODE -ne 0) { throw 'Test restore failed' }
+              dotnet run --project $project.FullName -c Release --no-restore
+              if ($LASTEXITCODE -ne 0) { throw 'Owned contract checks failed' }
+            }
+          }
+      - name: Build only this service image
+        run: docker build --tag factorymes/modbus-simulator:ci .
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Restore immutable platform packages
+        shell: pwsh
+        run: ./build/restore-packages.ps1
+      - name: Authenticate to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish only this tagged service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/nkpfactorymes/factorymes-modbus-simulator:${{ github.ref_name }}
